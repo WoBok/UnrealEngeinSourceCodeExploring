@@ -63,3 +63,35 @@ case EMeshPass::TranslucencyStandard: { ... break; }
 case EMeshPass::TranslucencyAll:      { ... break; }
 case EMeshPass::TranslucencyAfterDOF: { ... break; }
 这些，检查是否正确进行验证，给我正确的文件和行号
+
+
+
+直接在AddMeshBatch开头做区分
+void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy *RESTRICT PrimitiveSceneProxy, int32 StaticMeshId)
+{
+    if (PrimitiveSceneProxy->IsRenderAfterTranslucent())
+    {
+        return;
+    }
+    if (!MeshBatch.bUseForMaterial ||
+        (Flags & FMobileBasePassMeshProcessor::EFlags::DoNotCache) == FMobileBasePassMeshProcessor::EFlags::DoNotCache ||
+        (PrimitiveSceneProxy && !PrimitiveSceneProxy->ShouldRenderInMainPass()))
+    {
+        return;
+    }
+
+    const FMaterialRenderProxy *MaterialRenderProxy = MeshBatch.MaterialRenderProxy;
+    while (MaterialRenderProxy)
+    {
+        const FMaterial *Material = MaterialRenderProxy->GetMaterialNoFallback(FeatureLevel);
+        if (Material && Material->GetRenderingThreadShaderMap())
+        {
+            if (TryAddMeshBatch(MeshBatch, BatchElementMask, PrimitiveSceneProxy, StaticMeshId, *MaterialRenderProxy, *Material))
+            {
+                break;
+            }
+        }
+
+        MaterialRenderProxy = MaterialRenderProxy->GetFallback(FeatureLevel);
+    }
+}
