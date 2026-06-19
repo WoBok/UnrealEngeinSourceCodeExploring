@@ -63,7 +63,62 @@ case EMeshPass::TranslucencyStandard: { ... break; }
 case EMeshPass::TranslucencyAll:      { ... break; }
 case EMeshPass::TranslucencyAfterDOF: { ... break; }
 这些，检查是否正确进行验证，给我正确的文件和行号
+//3. -----------------------------------------------------------------------
+4.6 Source/Runtime/Renderer/Private/MobileTranslucentRendering.cpp
+在 FMobileSceneRenderer::RenderTranslucency 之后，新增一个新的成员函数：
 
+// MobileTranslucentRendering.cpp 末尾
+void FMobileSceneRenderer::RenderMobileBasePassAfterTranslucent(
+    FRHICommandList& RHICmdList, const FViewInfo& View)
+{
+    if (!CVarMobileRenderOpaqueAfterTranslucency.GetValueOnRenderThread())
+    {
+        return;
+    }
+
+    // Pass 不空才发起绘制
+    const FParallelMeshDrawCommandPass& Pass =
+        View.ParallelMeshDrawCommandPasses[EMeshPass::MobileBasePassAfterTranslucent];
+    if (!Pass.HasAnyDraw())
+    {
+        return;
+    }
+
+    SCOPED_DRAW_EVENT(RHICmdList, MobileBasePassAfterTranslucent);
+    SCOPED_GPU_STAT(RHICmdList, MobileBasePassAfterTranslucent);
+
+    RHICmdList.SetViewport(
+        View.ViewRect.Min.X, View.ViewRect.Min.Y, 0.0f,
+        View.ViewRect.Max.X, View.ViewRect.Max.Y, 1.0f);
+
+    // 这里不需要 InstanceCullingDrawParams 半透专用的，可以另存或复用 BasePass 的
+    Pass.DispatchDraw(nullptr, RHICmdList, /*InstanceCullingDrawParams*/ &MobileBasePassAfterTranslucentInstanceCullingDrawParams);
+}
+这个地方没有写Editor下的渲染
+Engine/Source/Runtime/Renderer/Private/MobileBasePassRendering.cpp:470
+void FMobileSceneRenderer::RenderMobileBasePass(FRHICommandList& RHICmdList, const FViewInfo& View, const FInstanceCullingDrawParams* InstanceCullingDrawParams)
+{
+	CSV_SCOPED_TIMING_STAT_EXCLUSIVE(RenderBasePass);
+	SCOPED_DRAW_EVENT(RHICmdList, MobileBasePass);
+	SCOPE_CYCLE_COUNTER(STAT_BasePassDrawTime);
+	SCOPED_GPU_STAT(RHICmdList, Basepass);
+
+	RHICmdList.SetViewport(View.ViewRect.Min.X, View.ViewRect.Min.Y, 0, View.ViewRect.Max.X, View.ViewRect.Max.Y, 1);
+	View.ParallelMeshDrawCommandPasses[EMeshPass::BasePass].DispatchDraw(nullptr, RHICmdList, InstanceCullingDrawParams);
+		
+	if (View.Family->EngineShowFlags.Atmosphere)
+	{
+		View.ParallelMeshDrawCommandPasses[EMeshPass::SkyPass].DispatchDraw(nullptr, RHICmdList, &SkyPassInstanceCullingDrawParams);
+	}
+
+	// editor primitives
+	FMeshPassProcessorRenderState DrawRenderState;
+	DrawRenderState.SetBlendState(TStaticBlendStateWriteMask<CW_RGBA>::GetRHI());
+	DrawRenderState.SetDepthStencilAccess(Scene->DefaultBasePassDepthStencilAccess);
+	DrawRenderState.SetDepthStencilState(TStaticDepthStencilState<true, CF_DepthNearOrEqual>::GetRHI());
+	RenderMobileEditorPrimitives(RHICmdList, View, DrawRenderState, InstanceCullingDrawParams);
+}
+是否可以参考这个进行修改？
 
 
 直接在AddMeshBatch开头做区分
