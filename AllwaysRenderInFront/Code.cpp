@@ -1,15 +1,15 @@
-// 在构造函数中添加bIsRenderAfterTranslucentPass的初始化
+// 在构造函数中添加bIsAfterranslucencyPass的初始化
 void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy *RESTRICT PrimitiveSceneProxy, int32 StaticMeshId)
 {
-    bool bIsRenderAfterTranslucentPass = PrimitiveSceneProxy->IsRenderAfterTranslucent();
-    if (bIsRenderAfterTranslucentPass)
+    bool bAfterTranslucencyBasePass = PrimitiveSceneProxy->ShouldRenderAfterTranslucency();
+    if (bIsAfterranslucencyPass)
     {
-        if (!bIsRenderAfterTranslucentPass)
+        if (!bAfterTranslucencyBasePass)
             return;
     }
     else
     {
-        if (bIsRenderAfterTranslucentPass)
+        if (bAfterTranslucencyBasePass)
             return;
     }
     if (!MeshBatch.bUseForMaterial ||

@@ -1,6 +1,4 @@
-1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileBasePassAfterTranslucency，:
-   83在GetMeshPassName中添加case EMeshPass::MobileBasePassAfterTranslucency: return TEXT("
-   MobileBasePassAfterTranslucency");并更新底部断言EMeshPass::Num == 33 + 4与EMeshPass::Num == 33
+1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileBasePassAfterTranslucency
 
 ```c++
 namespace EMeshPass
@@ -53,6 +51,9 @@ namespace EMeshPass
 	};
 }
 ```
+
+:83在GetMeshPassName中添加case EMeshPass::MobileBasePassAfterTranslucency: return TEXT("
+MobileBasePassAfterTranslucency");并更新底部断言EMeshPass::Num == 33 + 4与EMeshPass::Num == 33
 
 ```c++
 inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
@@ -111,7 +112,7 @@ inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
 }
 ```
 
-2. Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h:407附近添加bRenderAfterTranslucency字段，在:1917附近添加Setter，Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4457附近实现Setter
+2. Engine/Source/Runtime/Engine/Classes/Components/PrimitiveComponent.h:407附近添加bRenderAfterTranslucency字段
 
 ```c++
 //...
@@ -123,6 +124,8 @@ inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
 //...
 ```
 
+在:1917附近添加Setter
+
 ```c++
 	UFUNCTION(BlueprintCallable, Category = "Rendering")
 	ENGINE_API void SetRenderInMainPass(bool bValue);
@@ -130,6 +133,8 @@ inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
 	UFUNCTION(BlueprintCallable, Category = "Rendering")
 	ENGINE_API void SetRenderAfterTranslucency(bool bValue);
 ```
+
+Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4457附近实现Setter
 
 ```c++
 void UPrimitiveComponent::SetRenderInMainPass(bool bValue)
@@ -151,24 +156,120 @@ void UPrimitiveComponent::SetRenderAfterTranslucency(bool bValue)
 	}
 }
 ```
-3. Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h:1200附近添加bRenderAfterTranslucency，:700附近添加RenderAfterTranslucency(),Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp:277附近添加初始化bRenderAfterTranslucency，:428附近添加初始化bRenderAfterTranslucency
+
+3. Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h:1200附近添加bRenderAfterTranslucency
+
 ```c++
    uint8 bRenderInMainPass : 1;
    uint8 bRenderAfterTranslucency : 1;//RenderAfterTranslucency Added
 ```
+
+:700附近添加ShouldRenderAfterTranslucency()
+
 ```c++
     inline bool ShouldRenderInMainPass() const { return bRenderInMainPass; }
-    inline bool RenderAfterTranslucency() const { return bRenderAfterTranslucency; }//RenderAfterTranslucency Added
-```
-```c++
-    bRenderInMainPass = InComponent->bRenderInMainPass;
-    bRenderAfterTranslucency = InComponent->bRenderAfterTranslucency;
-```
-```c++
-    bRenderInMainPass(InProxyDesc.bRenderInMainPass),
-    bRenderAfterTranslucency(InProxyDesc.bRenderAfterTranslucency),
+    inline bool ShouldRenderAfterTranslucency() const { return bRenderAfterTranslucency; }//RenderAfterTranslucency Added
 ```
 
+Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp:277附近添加初始化bRenderAfterTranslucency
+
+```c++
+    bRenderInMainPass = InComponent->bRenderInMainPass;
+    bRenderAfterTranslucency = InComponent->bRenderAfterTranslucency;//RenderAfterTranslucency Added
+```
+
+:428附近添加初始化bRenderAfterTranslucency
+
+```c++
+    bRenderInMainPass(InProxyDesc.bRenderInMainPass),
+    bRenderAfterTranslucency(InProxyDesc.bRenderAfterTranslucency),//RenderAfterTranslucency Added
+```
+
+4. Engine/Source/Runtime/Renderer/Private/MobileBasePassRendering.h:533附近添加bAfterTranslucencyBasePass
+
+```c++
+    const bool bPassUsesDeferredShading; 
+    const bool bAfterTranslucencyBasePass; //RenderAfterTranslucency Added
+```
+
+MobileBasePassRendering.h:480附近构造函数添加,bool bAfterTranslucencyBasePass
+
+```c++
+	FMobileBasePassMeshProcessor(
+		EMeshPass::Type InMeshPassType,
+		const FScene* InScene,
+		const FSceneView* InViewIfDynamicMeshCommand,
+		const FMeshPassProcessorRenderState& InDrawRenderState,
+		FMeshPassDrawListContext* InDrawListContext,
+		EFlags Flags,
+		ETranslucencyPass::Type InTranslucencyPassType = ETranslucencyPass::TPT_MAX,
+		bool bAfterTranslucencyBasePass);//RenderAfterTranslucency Added
+```
+
+Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp
+
+```c++
+   FMobileBasePassMeshProcessor::FMobileBasePassMeshProcessor(
+       EMeshPass::Type InMeshPassType,
+       const FScene* Scene,
+       const FSceneView* InViewIfDynamicMeshCommand,
+       const FMeshPassProcessorRenderState& InDrawRenderState,
+       FMeshPassDrawListContext* InDrawListContext,
+       EFlags InFlags,
+       ETranslucencyPass::Type InTranslucencyPassType,
+       bool IsAfterTranslucencyBasePass)
+       : FMeshPassProcessor(InMeshPassType, Scene, ERHIFeatureLevel::ES3_1, InViewIfDynamicMeshCommand, InDrawListContext)
+       , PassDrawRenderState(InDrawRenderState)
+       , TranslucencyPassType(InTranslucencyPassType)
+       , Flags(InFlags)
+       , bTranslucentBasePass(InTranslucencyPassType != ETranslucencyPass::TPT_MAX)
+       , bDeferredShading(IsMobileDeferredShadingEnabled(GetFeatureLevelShaderPlatform(ERHIFeatureLevel::ES3_1)))
+       , bPassUsesDeferredShading(bDeferredShading && !bTranslucentBasePass
+       , bAfterTranslucencyBasePass(IsAfterTranslucencyBasePass))//RenderAfterTranslucency Added
+   {
+   }
+```
+
+Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:
+867处修改AddMeshBatch函数，通过构造函数传入的bAfterTranslucencyBasePass与PrimitiveSceneProxy中的ShouldRenderAfterTranslucency做Pass分流
+
+```c++
+void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy *RESTRICT PrimitiveSceneProxy, int32 StaticMeshId)
+{
+    bool bShouldRenderAfterTranslucency = PrimitiveSceneProxy->ShouldRenderAfterTranslucency();
+    if (bAfterTranslucencyBasePass)
+    {
+        if (!bShouldRenderAfterTranslucency)
+            return;
+    }
+    else
+    {
+        if (bShouldRenderAfterTranslucency)
+            return;
+    }
+    if (!MeshBatch.bUseForMaterial ||
+        (Flags & FMobileBasePassMeshProcessor::EFlags::DoNotCache) == FMobileBasePassMeshProcessor::EFlags::DoNotCache ||
+        (PrimitiveSceneProxy && !PrimitiveSceneProxy->ShouldRenderInMainPass()))
+    {
+        return;
+    }
+
+    const FMaterialRenderProxy *MaterialRenderProxy = MeshBatch.MaterialRenderProxy;
+    while (MaterialRenderProxy)
+    {
+        const FMaterial *Material = MaterialRenderProxy->GetMaterialNoFallback(FeatureLevel);
+        if (Material && Material->GetRenderingThreadShaderMap())
+        {
+            if (TryAddMeshBatch(MeshBatch, BatchElementMask, PrimitiveSceneProxy, StaticMeshId, *MaterialRenderProxy, *Material))
+            {
+                break;
+            }
+        }
+
+        MaterialRenderProxy = MaterialRenderProxy->GetFallback(FeatureLevel);
+    }
+}
+```
 
 ---
 PrimitiveViewRelevance.h?
