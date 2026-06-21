@@ -156,6 +156,11 @@ void UPrimitiveComponent::SetRenderAfterTranslucency(bool bValue)
 	}
 }
 ```
+:333附近添加bRenderAfterTranslucency = false
+```c++
+    bRenderInMainPass = true;
+    bRenderAfterTranslucency = false;//RenderAfterTranslucency Added
+```
 
 3. Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxy.h:1200附近添加bRenderAfterTranslucency
 
@@ -183,6 +188,16 @@ Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp:277附近添加初�
 ```c++
     bRenderInMainPass(InProxyDesc.bRenderInMainPass),
     bRenderAfterTranslucency(InProxyDesc.bRenderAfterTranslucency),//RenderAfterTranslucency Added
+```
+Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxyDesc.h:93附近添加bRenderAfterTranslucency
+```c++
+    uint32 bRenderInMainPass : 1;
+    uint32 bRenderAfterTranslucency : 1;//RenderAfterTranslucency Added
+```
+:25附近添加bRenderAfterTranslucency = false
+```c++
+    bRenderInMainPass = true;
+    bRenderAfterTranslucency = false;//RenderAfterTranslucency Added
 ```
 
 4. Engine/Source/Runtime/Renderer/Private/MobileBasePassRendering.h:533附近添加bAfterTranslucencyBasePass
@@ -224,7 +239,7 @@ Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:810附近添加构造�
        , Flags(InFlags)
        , bTranslucentBasePass(InTranslucencyPassType != ETranslucencyPass::TPT_MAX)
        , bDeferredShading(IsMobileDeferredShadingEnabled(GetFeatureLevelShaderPlatform(ERHIFeatureLevel::ES3_1)))
-       , bPassUsesDeferredShading(bDeferredShading && !bTranslucentBasePass
+       , bPassUsesDeferredShading(bDeferredShading && !bTranslucentBasePass)
        , bAfterTranslucencyBasePass(IsAfterTranslucencyBasePass))//RenderAfterTranslucency Added
    {
    }
@@ -360,4 +375,10 @@ RenderTranslucency(RHICmdList, View);
 RenderMobileAfterTranslucencyPass(RHICmdList, View, &PassParameters->InstanceCullingDrawParams);//RenderAfterTranslucency Added
 ```
 ---
+1. 
 PrimitiveViewRelevance.h?
+2. 与PSO的整体关系，改动是否会影响PSO
+Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4620
+void UPrimitiveComponent::SetupPrecachePSOParams(FPSOPrecacheParams& Params)
+{
+Params.bRenderInMainPass = bRenderInMainPass;???
