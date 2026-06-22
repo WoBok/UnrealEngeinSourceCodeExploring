@@ -1,3 +1,7 @@
+我现在正在UE5.4中开发Android端VR游戏，我现在有这样一个需求，在渲染不透明物体的阶段，我标记的物体不进行渲染，当渲染完成透明物体后再渲染我标记的物体，我的想法是模仿移动端不透明物体渲染的逻辑，在透明物体渲染完成后再进行一次
+我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，找出潜在的问题，如果还需要
+修改其他部分的代码，也要给我指出
+
 1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileAfterTranslucencyPass
 
 ```c++
@@ -156,7 +160,9 @@ void UPrimitiveComponent::SetRenderAfterTranslucency(bool bValue)
 	}
 }
 ```
+
 :333附近添加bRenderAfterTranslucency = false
+
 ```c++
     bRenderInMainPass = true;
     bRenderAfterTranslucency = false;//RenderAfterTranslucency Added
@@ -189,12 +195,16 @@ Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp:277附近添加初�
     bRenderInMainPass(InProxyDesc.bRenderInMainPass),
     bRenderAfterTranslucency(InProxyDesc.bRenderAfterTranslucency),//RenderAfterTranslucency Added
 ```
+
 Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxyDesc.h:93附近添加bRenderAfterTranslucency
+
 ```c++
     uint32 bRenderInMainPass : 1;
     uint32 bRenderAfterTranslucency : 1;//RenderAfterTranslucency Added
 ```
+
 :25附近添加bRenderAfterTranslucency = false
+
 ```c++
     bRenderInMainPass = true;
     bRenderAfterTranslucency = false;//RenderAfterTranslucency Added
@@ -221,7 +231,8 @@ MobileBasePassRendering.h:480附近构造函数添加bool bAfterTranslucencyBase
 		bool bAfterTranslucencyBasePass = false);//RenderAfterTranslucency Added
 ```
 
-Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:810附近添加构造函数初始化bAfterTranslucencyBasePass(IsAfterTranslucencyBasePass)
+Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:810附近添加构造函数初始化bAfterTranslucencyBasePass(
+IsAfterTranslucencyBasePass)
 
 ```c++
    FMobileBasePassMeshProcessor::FMobileBasePassMeshProcessor(
@@ -319,13 +330,17 @@ FMeshPassProcessor* CreateMobileAfterTranslucencyPassProcessor(ERHIFeatureLevel:
 	return new FMobileBasePassMeshProcessor(EMeshPass::MobileAfterTranslucencyPass, Scene, InViewIfDynamicMeshCommand, PassDrawRenderState, InDrawListContext, Flags, true);
 }
 ```
+
 在:1123处加入
+
 ```c++
 REGISTER_MESHPASSPROCESSOR_AND_PSOCOLLECTOR(MobileTranslucencyAfterDOFPass,	CreateMobileTranslucencyAfterDOFProcessor,	EShadingPath::Mobile, EMeshPass::TranslucencyAfterDOF, 	EMeshPassFlags::MainView);
 //RenderAfterTranslucency Added
 REGISTER_MESHPASSPROCESSOR_AND_PSOCOLLECTOR(MobileAfterTranslucencyPass, CreateMobileAfterTranslucencyPassProcessor, EShadingPath::Mobile, EMeshPass::MobileAfterTranslucencyPass, EMeshPassFlags::CachedMeshCommands | EMeshPassFlags::MainView);
 ```
+
 5. Engine/Source/Runtime/Renderer/Private/MobileBasePassRendering.cpp:492附近添加RenderMobileAfterTranslucencyPass()
+
 ```c++
 void FMobileSceneRenderer::RenderMobileBasePass(FRHICommandList& RHICmdList, const FViewInfo& View, const FInstanceCullingDrawParams* InstanceCullingDrawParams)
 {
@@ -362,23 +377,208 @@ void FMobileSceneRenderer::RenderMobileAfterTranslucencyPass(FRHICommandList& RH
 	View.ParallelMeshDrawCommandPasses[EMeshPass::MobileAfterTranslucencyPass].DispatchDraw(nullptr, RHICmdList, InstanceCullingDrawParams);
 }
 ```
-Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:1624处RenderForwardSinglePass中添加RenderMobileAfterTranslucencyPass()调用
+
+Engine/Source/Runtime/RenderCore/Private/RenderCore.cpp:65附近添加 DEFINE_STAT(STAT_AfterTranslucencyDrawTime)
+
 ```c++
-//...
-RenderTranslucency(RHICmdList, View);
-RenderMobileAfterTranslucencyPass(RHICmdList, View, &PassParameters->InstanceCullingDrawParams);//RenderAfterTranslucency Added
+DEFINE_STAT(STAT_BasePassDrawTime);
+DEFINE_STAT(STAT_AfterTranslucencyDrawTime);
 ```
-:1736处RenderForwardMultiPass中添加RenderMobileAfterTranslucencyPass()调用
+在Engine/Source/Runtime/Renderer/Private/SceneRendering.h:2796处添加AfterTranslucencyInstanceCullingDrawParams
 ```c++
-//...
-RenderTranslucency(RHICmdList, View);
-RenderMobileAfterTranslucencyPass(RHICmdList, View, &PassParameters->InstanceCullingDrawParams);//RenderAfterTranslucency Added
+	FInstanceCullingDrawParams TranslucencyInstanceCullingDrawParams;	
+	FInstanceCullingDrawParams AfterTranslucencyInstanceCullingDrawParams;
 ```
----
-1. 
-PrimitiveViewRelevance.h?
-2. 与PSO的整体关系，改动是否会影响PSO
-Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4620
-void UPrimitiveComponent::SetupPrecachePSOParams(FPSOPrecacheParams& Params)
+在Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:1433BuildInstanceCullingDrawParams中添加
+```c++
+void FMobileSceneRenderer::BuildInstanceCullingDrawParams(FRDGBuilder& GraphBuilder, FViewInfo& View, FMobileRenderPassParameters* PassParameters)
 {
-Params.bRenderInMainPass = bRenderInMainPass;???
+	if (Scene->GPUScene.IsEnabled())
+	{
+		if (!bIsFullDepthPrepassEnabled)
+		{
+			View.ParallelMeshDrawCommandPasses[EMeshPass::DepthPass].BuildRenderingCommands(GraphBuilder, Scene->GPUScene, DepthPassInstanceCullingDrawParams);
+		}
+		View.ParallelMeshDrawCommandPasses[EMeshPass::BasePass].BuildRenderingCommands(GraphBuilder, Scene->GPUScene, PassParameters->InstanceCullingDrawParams);
+		View.ParallelMeshDrawCommandPasses[EMeshPass::SkyPass].BuildRenderingCommands(GraphBuilder, Scene->GPUScene, SkyPassInstanceCullingDrawParams);
+		View.ParallelMeshDrawCommandPasses[StandardTranslucencyMeshPass].BuildRenderingCommands(GraphBuilder, Scene->GPUScene, TranslucencyInstanceCullingDrawParams);
+		View.ParallelMeshDrawCommandPasses[EMeshPass::DebugViewMode].BuildRenderingCommands(GraphBuilder, Scene->GPUScene, DebugViewModeInstanceCullingDrawParams);
+		View.ParallelMeshDrawCommandPasses[EMeshPass::MobileAfterTranslucencyPass].BuildRenderingCommands(GraphBuilder, Scene->GPUScene, AfterTranslucencyInstanceCullingDrawParams);
+	}
+}
+```
+Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:
+1624处RenderForwardSinglePass中添加RenderMobileAfterTranslucencyPass()调用
+
+```c++
+//...
+RenderTranslucency(RHICmdList, View);
+RenderMobileAfterTranslucencyPass(RHICmdList, View, &AfterTranslucencyInstanceCullingDrawParams);//RenderAfterTranslucency Added
+```
+
+:1736处RenderForwardMultiPass中添加RenderMobileAfterTranslucencyPass()调用
+
+```c++
+//...
+RenderTranslucency(RHICmdList, View);
+RenderMobileAfterTranslucencyPass(RHICmdList, View, &AfterTranslucencyInstanceCullingDrawParams);//RenderAfterTranslucency Added
+```
+
+6. Engine/Source/Runtime/Engine/Public/PrimitiveViewRelevance.h:54附近添加bRenderAfterTranslucency
+
+```c++
+    uint32 bRenderInMainPass : 1;
+    uint32 bRenderAfterTranslucency : 1;//RenderAfterTranslucency Added
+```
+
+在:103附近添加bRenderAfterTranslucency = false
+
+```c++
+	FPrimitiveViewRelevance()
+	{
+		// the class is only storing bits, the following avoids code redundancy
+		uint8 * RESTRICT p = (uint8*)this;
+		for(uint32 i = 0; i < sizeof(*this); ++i)
+		{
+			*p++ = 0;
+		}
+
+		// only exceptions (bugs we need to fix?):
+
+		bOpaque = true;
+		// without it BSP doesn't render
+		bRenderInMainPass = true;
+	}
+	//修改为↓
+		FPrimitiveViewRelevance()
+	{
+		// the class is only storing bits, the following avoids code redundancy
+		uint8 * RESTRICT p = (uint8*)this;
+		for(uint32 i = 0; i < sizeof(*this); ++i)
+		{
+			*p++ = 0;
+		}
+
+		// only exceptions (bugs we need to fix?):
+
+		bOpaque = true;
+		// without it BSP doesn't render
+		bRenderInMainPass = true;
+		bRenderAfterTranslucency = false;//RenderAfterTranslucency Added
+	}
+```
+
+Engine/Source/Runtime/Engine/Private/StaticMeshRender.cpp:2062处添加
+
+```c++
+    Result.bRenderInMainPass = ShouldRenderInMainPass();
+    Result.bRenderAfterTranslucency = ShouldRenderAfterTranslucency();
+```
+
+Engine/Source/Runtime/Engine/Private/SkeletalMesh.cpp:7107处添加
+
+```c++
+    Result.bRenderInMainPass = ShouldRenderInMainPass();
+    Result.bRenderAfterTranslucency = ShouldRenderAfterTranslucency();
+```
+
+在Runtime/Renderer/Private/SceneVisibility.cpp:1564附近添加
+
+```c++
+if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth))
+{
+    // Specific logic for mobile packets
+    if (ShadingPath == EShadingPath::Mobile)
+    {
+        // Skydome must not be added to base pass bucket
+        if (!StaticMeshRelevance.bUseSkyMaterial)
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::BasePass);
+            if (!bMobileBasePassAlwaysUsesCSM)
+            {
+                DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::MobileBasePassCSM);
+            }
+        }
+        else
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::SkyPass);
+        }
+        // bUseSingleLayerWaterMaterial is added to BasePass on Mobile. No need to add it to SingleLayerWaterPass
+
+        MarkMask |= EMarkMaskBits::StaticMeshVisibilityMapMask;
+    }
+//修改为↓
+if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth))
+{
+    // Specific logic for mobile packets
+    if (ShadingPath == EShadingPath::Mobile)
+    {
+        // Skydome must not be added to base pass bucket
+        if (!StaticMeshRelevance.bUseSkyMaterial)
+        {
+            if(ViewRelevance.bRenderAfterTranslucency)
+            {
+                DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::MobileAfterTranslucencyPass);//RenderAfterTranslucency Added
+            }else
+            {
+                DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::BasePass);
+            }
+            if (!bMobileBasePassAlwaysUsesCSM)
+            {
+                DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::MobileBasePassCSM);
+            }
+        }
+        else
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::SkyPass);
+        }
+        // bUseSingleLayerWaterMaterial is added to BasePass on Mobile. No need to add it to SingleLayerWaterPass
+
+        MarkMask |= EMarkMaskBits::StaticMeshVisibilityMapMask;
+    }
+```
+
+```c++
+    if (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth)
+    {
+    	PassMask.Set(EMeshPass::BasePass);
+    	View.NumVisibleDynamicMeshElements[EMeshPass::BasePass] += NumElements;
+    //...
+//修改为↓
+    if (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth)
+    {
+        if(ViewRelevance.bRenderAfterTranslucency)
+        {
+            PassMask.Set(EMeshPass::MobileAfterTranslucencyPass);
+            View.NumVisibleDynamicMeshElements[EMeshPass::MobileAfterTranslucencyPass] += NumElements;
+        }else
+        {
+            PassMask.Set(EMeshPass::BasePass);
+            View.NumVisibleDynamicMeshElements[EMeshPass::BasePass] += NumElements;
+        }
+
+```
+
+---
+需要考虑的两个问题：
+
+1. 与PSO的整体关系，改动是否会影响PSO
+   Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4620
+   void UPrimitiveComponent::SetupPrecachePSOParams(FPSOPrecacheParams& Params)
+   {
+   Params.bRenderInMainPass = bRenderInMainPass;???
+   文件:行 作用
+   Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4622 Params.bRenderInMainPass =
+   bRenderInMainPass;（写入 FPSOPrecacheParams）
+   Engine/Source/Runtime/Engine/Public/PSOPrecache.h:34 FPSOPrecacheParams 默认 bRenderInMainPass = true
+   此路径不影响运行时可见性，仅用于 PSO 收集。
+   这一部分PSO相关是否需要修改？
+2. Runtime/Engine/Public/PrimitiveViewRelevance.h:40
+   /** The primitive's static elements are rendered for the view. */
+   uint32 bStaticRelevance : 1;
+   /** The primitive's dynamic elements are rendered for the view. */
+   uint32 bDynamicRelevance : 1;???
+
+   /** The primitive should render to the depth prepass even if it's not rendered in the main pass. */
+   uint32 bRenderInDepthPass : 1;
+   这里的bStaticRelevance，bDynamicRelevance，bRenderInDepthPass有什么地方需要进行修改吗？

@@ -150,3 +150,54 @@ void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshB
         MaterialRenderProxy = MaterialRenderProxy->GetFallback(FeatureLevel);
     }
 }
+
+
+
+```c++
+if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth))
+{
+    // Specific logic for mobile packets
+    if (ShadingPath == EShadingPath::Mobile)
+    {
+        // Skydome must not be added to base pass bucket
+        if (!StaticMeshRelevance.bUseSkyMaterial)
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::BasePass);
+            if (!bMobileBasePassAlwaysUsesCSM)
+            {
+                DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::MobileBasePassCSM);
+            }
+        }
+        else
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::SkyPass);
+        }
+        // bUseSingleLayerWaterMaterial is added to BasePass on Mobile. No need to add it to SingleLayerWaterPass
+
+        MarkMask |= EMarkMaskBits::StaticMeshVisibilityMapMask;
+    }
+//修改为👇
+if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth))
+{
+    // Specific logic for mobile packets
+    if (ShadingPath == EShadingPath::Mobile)
+    {
+        // Skydome must not be added to base pass bucket
+        if (!StaticMeshRelevance.bUseSkyMaterial)
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::BasePass);
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::MobileAfterTranslucencyPass);
+            if (!bMobileBasePassAlwaysUsesCSM)
+            {
+                DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::MobileBasePassCSM);
+            }
+        }
+        else
+        {
+            DrawCommandPacket.AddCommandsForMesh(PrimitiveIndex, PrimitiveSceneInfo, StaticMeshRelevance, StaticMesh, CullingPayloadFlags, Scene, bCanCache, EMeshPass::SkyPass);
+        }
+        // bUseSingleLayerWaterMaterial is added to BasePass on Mobile. No need to add it to SingleLayerWaterPass
+
+        MarkMask |= EMarkMaskBits::StaticMeshVisibilityMapMask;
+    }
+```
