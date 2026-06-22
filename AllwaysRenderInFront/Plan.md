@@ -1,6 +1,6 @@
 我现在正在UE5.4中开发Android端VR游戏，我现在有这样一个需求，在渲染不透明物体的阶段，我标记的物体不进行渲染，当渲染完成透明物体后再渲染我标记的物体，我的想法是模仿移动端不透明物体渲染的逻辑，在透明物体渲染完成后再进行一次
-我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，找出潜在的问题，如果还需要
-修改其他部分的代码，也要给我指出
+我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），我只需要让Mesh和Skeletal Mesh生效即可，我也不需要CustomDepth，
+我只需要移动端，Forward渲染路径的修改即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改
 
 1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileAfterTranslucencyPass
 
@@ -134,6 +134,7 @@ inline const TCHAR* GetMeshPassName(EMeshPass::Type MeshPass)
 	UFUNCTION(BlueprintCallable, Category = "Rendering")
 	ENGINE_API void SetRenderInMainPass(bool bValue);
 	
+	//RenderAfterTranslucency Added
 	UFUNCTION(BlueprintCallable, Category = "Rendering")
 	ENGINE_API void SetRenderAfterTranslucency(bool bValue);
 ```
@@ -217,7 +218,7 @@ Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxyDesc.h:93附近添加bRen
     const bool bAfterTranslucencyBasePass; //RenderAfterTranslucency Added
 ```
 
-MobileBasePassRendering.h:480附近构造函数添加bool bAfterTranslucencyBasePass，并设置默认值为false
+MobileBasePassRendering.h:480构造函数添加bool bAfterTranslucencyBasePass，并设置默认值为false
 
 ```c++
 	FMobileBasePassMeshProcessor(
@@ -256,12 +257,17 @@ IsAfterTranslucencyBasePass)
    }
 ```
 
-Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:
-867处修改AddMeshBatch函数，通过构造函数传入的bAfterTranslucencyBasePass与PrimitiveSceneProxy中的ShouldRenderAfterTranslucency做Pass分流
+Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:867处修改AddMeshBatch函数，通过构造函数传入的bAfterTranslucencyBasePass与PrimitiveSceneProxy中的ShouldRenderAfterTranslucency做Pass分流
 
 ```c++
 void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy *RESTRICT PrimitiveSceneProxy, int32 StaticMeshId)
 {
+    if (!MeshBatch.bUseForMaterial ||
+        (Flags & FMobileBasePassMeshProcessor::EFlags::DoNotCache) == FMobileBasePassMeshProcessor::EFlags::DoNotCache ||
+        (PrimitiveSceneProxy && !PrimitiveSceneProxy->ShouldRenderInMainPass()))
+    {
+        return;
+    }
     //RenderAfterTranslucency Added
     bool bShouldRenderAfterTranslucency = PrimitiveSceneProxy->ShouldRenderAfterTranslucency();
     if (bAfterTranslucencyBasePass)
@@ -273,12 +279,6 @@ void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshB
     {
         if (bShouldRenderAfterTranslucency)
             return;
-    }
-    if (!MeshBatch.bUseForMaterial ||
-        (Flags & FMobileBasePassMeshProcessor::EFlags::DoNotCache) == FMobileBasePassMeshProcessor::EFlags::DoNotCache ||
-        (PrimitiveSceneProxy && !PrimitiveSceneProxy->ShouldRenderInMainPass()))
-    {
-        return;
     }
 
     const FMaterialRenderProxy *MaterialRenderProxy = MeshBatch.MaterialRenderProxy;
@@ -331,7 +331,7 @@ FMeshPassProcessor* CreateMobileAfterTranslucencyPassProcessor(ERHIFeatureLevel:
 }
 ```
 
-在:1123处加入
+在:1223处加入
 
 ```c++
 REGISTER_MESHPASSPROCESSOR_AND_PSOCOLLECTOR(MobileTranslucencyAfterDOFPass,	CreateMobileTranslucencyAfterDOFProcessor,	EShadingPath::Mobile, EMeshPass::TranslucencyAfterDOF, 	EMeshPassFlags::MainView);
@@ -407,8 +407,7 @@ void FMobileSceneRenderer::BuildInstanceCullingDrawParams(FRDGBuilder& GraphBuil
 	}
 }
 ```
-Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:
-1624处RenderForwardSinglePass中添加RenderMobileAfterTranslucencyPass()调用
+Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:1624处RenderForwardSinglePass中添加RenderMobileAfterTranslucencyPass()调用
 
 ```c++
 //...
@@ -468,14 +467,14 @@ RenderMobileAfterTranslucencyPass(RHICmdList, View, &AfterTranslucencyInstanceCu
 	}
 ```
 
-Engine/Source/Runtime/Engine/Private/StaticMeshRender.cpp:2062处添加
+Engine/Source/Runtime/Engine/Private/StaticMeshRender.cpp:2055 GetViewRelevance中添加
 
 ```c++
     Result.bRenderInMainPass = ShouldRenderInMainPass();
     Result.bRenderAfterTranslucency = ShouldRenderAfterTranslucency();
 ```
 
-Engine/Source/Runtime/Engine/Private/SkeletalMesh.cpp:7107处添加
+Engine/Source/Runtime/Engine/Private/SkeletalMesh.cpp:7107 GetViewRelevance中添加
 
 ```c++
     Result.bRenderInMainPass = ShouldRenderInMainPass();
@@ -537,7 +536,7 @@ if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || V
         MarkMask |= EMarkMaskBits::StaticMeshVisibilityMapMask;
     }
 ```
-
+Engine/Source/Runtime/Renderer/Private/SceneVisibility.cpp:2186 ComputeDynamicMeshRelevance中，:2211附近
 ```c++
     if (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth)
     {
@@ -558,27 +557,3 @@ if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || V
         }
 
 ```
-
----
-需要考虑的两个问题：
-
-1. 与PSO的整体关系，改动是否会影响PSO
-   Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4620
-   void UPrimitiveComponent::SetupPrecachePSOParams(FPSOPrecacheParams& Params)
-   {
-   Params.bRenderInMainPass = bRenderInMainPass;???
-   文件:行 作用
-   Engine/Source/Runtime/Engine/Private/Components/PrimitiveComponent.cpp:4622 Params.bRenderInMainPass =
-   bRenderInMainPass;（写入 FPSOPrecacheParams）
-   Engine/Source/Runtime/Engine/Public/PSOPrecache.h:34 FPSOPrecacheParams 默认 bRenderInMainPass = true
-   此路径不影响运行时可见性，仅用于 PSO 收集。
-   这一部分PSO相关是否需要修改？
-2. Runtime/Engine/Public/PrimitiveViewRelevance.h:40
-   /** The primitive's static elements are rendered for the view. */
-   uint32 bStaticRelevance : 1;
-   /** The primitive's dynamic elements are rendered for the view. */
-   uint32 bDynamicRelevance : 1;???
-
-   /** The primitive should render to the depth prepass even if it's not rendered in the main pass. */
-   uint32 bRenderInDepthPass : 1;
-   这里的bStaticRelevance，bDynamicRelevance，bRenderInDepthPass有什么地方需要进行修改吗？
