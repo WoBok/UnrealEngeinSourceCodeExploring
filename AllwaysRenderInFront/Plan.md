@@ -1,6 +1,6 @@
 我现在正在UE5.4中开发Android端VR游戏，我现在有这样一个需求，在渲染不透明物体的阶段，我标记的物体不进行渲染，当渲染完成透明物体后再渲染我标记的物体，我的想法是模仿移动端不透明物体渲染的逻辑，在透明物体渲染完成后再进行一次
 我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），我只需要让Mesh和Skeletal Mesh生效即可，我也不需要CustomDepth，
-我只需要移动端，Forward渲染路径的修改即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改
+我只需要移动端，行号不用做出太多纠正，代码只要在正确的文件中，正确的作用域即可，Forward渲染路径的修改即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改
 
 1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileAfterTranslucencyPass
 
@@ -183,7 +183,7 @@ void UPrimitiveComponent::SetRenderAfterTranslucency(bool bValue)
     inline bool ShouldRenderAfterTranslucency() const { return bRenderAfterTranslucency; }//RenderAfterTranslucency Added
 ```
 
-Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp:277附近添加初始化bRenderAfterTranslucency
+Engine/Source/Runtime/Engine/Private/PrimitiveSceneProxy.cpp的InitializeFrom中:277附近添加初始化bRenderAfterTranslucency
 
 ```c++
     bRenderInMainPass = InComponent->bRenderInMainPass;
@@ -319,13 +319,11 @@ FMeshPassProcessor* CreateMobileBasePassProcessor(ERHIFeatureLevel::Type Feature
 FMeshPassProcessor* CreateMobileAfterTranslucencyPassProcessor(ERHIFeatureLevel::Type FeatureLevel, const FScene* Scene, const FSceneView* InViewIfDynamicMeshCommand, FMeshPassDrawListContext* InDrawListContext)
 {
 	FMeshPassProcessorRenderState PassDrawRenderState;
-	PassDrawRenderState.SetBlendState(TStaticBlendStateWriteMask<CW_RGBA>::GetRHI());
-	const FExclusiveDepthStencil::Type DefaultBasePassDepthStencilAccess = FScene::GetDefaultBasePassDepthStencilAccess(FeatureLevel);
-	PassDrawRenderState.SetDepthStencilAccess(DefaultBasePassDepthStencilAccess);
-	PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<true, CF_DepthNearOrEqual>::GetRHI());
+	//PassDrawRenderState.SetBlendState(TStaticBlendStateWriteMask<CW_RGBA>::GetRHI());//是否还需要？
+	PassDrawRenderState.SetDepthStencilAccess(FExclusiveDepthStencil::DepthRead_StencilRead);
+	PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<false, CF_DepthNearOrEqual>::GetRHI());//这里使用false就可以了吧？SetDepthStencilState和TStaticDepthStencilState的作用是什么？
 
-	const FMobileBasePassMeshProcessor::EFlags Flags = FMobileBasePassMeshProcessor::EFlags::CanUseDepthStencil
-		| (MobileBasePassAlwaysUsesCSM(GShaderPlatformForFeatureLevel[FeatureLevel]) ? FMobileBasePassMeshProcessor::EFlags::CanReceiveCSM : FMobileBasePassMeshProcessor::EFlags::None);
+	const FMobileBasePassMeshProcessor::EFlags Flags = FMobileBasePassMeshProcessor::EFlags::CanUseDepthStencil;//这里直接赋值CanUseDepthStencil就可以了吧？不需要CreateMobileBasePassProcessor中那么多判断吧？
 
 	return new FMobileBasePassMeshProcessor(EMeshPass::MobileAfterTranslucencyPass, Scene, InViewIfDynamicMeshCommand, PassDrawRenderState, InDrawListContext, Flags, true);
 }
@@ -377,12 +375,26 @@ void FMobileSceneRenderer::RenderMobileAfterTranslucencyPass(FRHICommandList& RH
 	View.ParallelMeshDrawCommandPasses[EMeshPass::MobileAfterTranslucencyPass].DispatchDraw(nullptr, RHICmdList, InstanceCullingDrawParams);
 }
 ```
-
+Engine/Source/Runtime/Renderer/Private/SceneRendering.h的FMobileSceneRenderer中（RenderMobileBasePass声明附近，约 2695 行）添加：
+```c++
+	void RenderMobileBasePass(FRHICommandList& RHICmdList, const FViewInfo& View, const FInstanceCullingDrawParams* InstanceCullingDrawParams);
+    void RenderMobileAfterTranslucencyPass(FRHICommandList& RHICmdList, const FViewInfo& View, const FInstanceCullingDrawParams* InstanceCullingDrawParams);
+```
 Engine/Source/Runtime/RenderCore/Private/RenderCore.cpp:65附近添加 DEFINE_STAT(STAT_AfterTranslucencyDrawTime)
 
 ```c++
 DEFINE_STAT(STAT_BasePassDrawTime);
 DEFINE_STAT(STAT_AfterTranslucencyDrawTime);
+```
+在 RenderCore.h 中（STAT_BasePassDrawTime 声明附近，约 44 行）添加：
+```c++
+DECLARE_CYCLE_STAT_EXTERN(TEXT("Base pass drawing"),STAT_BasePassDrawTime,STATGROUP_SceneRendering, RENDERCORE_API);
+DECLARE_CYCLE_STAT_EXTERN(TEXT("After translucency drawing"), STAT_AfterTranslucencyDrawTime, STATGROUP_SceneRendering, RENDERCORE_API);
+```
+Engine/Source/Runtime/Renderer/Private/BasePassRendering.h:144附近
+```c++
+DECLARE_GPU_DRAWCALL_STAT_EXTERN(Basepass);
+DECLARE_GPU_DRAWCALL_STAT_EXTERN(AfterTranslucency);
 ```
 在Engine/Source/Runtime/Renderer/Private/SceneRendering.h:2796处添加AfterTranslucencyInstanceCullingDrawParams
 ```c++
@@ -546,7 +558,7 @@ Engine/Source/Runtime/Renderer/Private/SceneVisibility.cpp:2186 ComputeDynamicMe
 //修改为↓
     if (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth)
     {
-        if(ViewRelevance.bRenderAfterTranslucency)
+        if(ShadingPath == EShadingPath::Mobile && ViewRelevance.bRenderAfterTranslucency)
         {
             PassMask.Set(EMeshPass::MobileAfterTranslucencyPass);
             View.NumVisibleDynamicMeshElements[EMeshPass::MobileAfterTranslucencyPass] += NumElements;
@@ -555,5 +567,4 @@ Engine/Source/Runtime/Renderer/Private/SceneVisibility.cpp:2186 ComputeDynamicMe
             PassMask.Set(EMeshPass::BasePass);
             View.NumVisibleDynamicMeshElements[EMeshPass::BasePass] += NumElements;
         }
-
 ```
