@@ -568,3 +568,14 @@ Engine/Source/Runtime/Renderer/Private/SceneVisibility.cpp:2186 ComputeDynamicMe
             View.NumVisibleDynamicMeshElements[EMeshPass::BasePass] += NumElements;
         }
 ```
+---
+3.3 设计问题 — bAfterTranslucencyBasePass 成员冗余
+计划添加了 bool bAfterTranslucencyBasePass 成员，但同样的信息可通过 InMeshPassType == EMeshPass::MobileAfterTranslucencyPass 获得。在 AddMeshBatch 中可简化为：
+
+// 在 AddMeshBatch 中，用 MeshPassType 替换 bAfterTranslucencyBasePass 分支：
+const bool bAfterTranslucencyPass = (MeshPassType == EMeshPass::MobileAfterTranslucencyPass);
+if (bAfterTranslucencyPass != PrimitiveSceneProxy->ShouldRenderAfterTranslucency())
+{
+return;
+}
+或者直接比较 MeshPassType 以完全去掉这个成员。
