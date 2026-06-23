@@ -1,6 +1,6 @@
 我现在正在UE5.4中开发Android端VR游戏，我现在有这样一个需求，在渲染不透明物体的阶段，我标记的物体不进行渲染，当渲染完成透明物体后再渲染我标记的物体，我的想法是模仿移动端不透明物体渲染的逻辑，在透明物体渲染完成后再进行一次
 我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），我只需要让Mesh和Skeletal Mesh生效即可，我也不需要CustomDepth，
-我只需要移动端，行号不用做出太多纠正，代码只要在正确的文件中，正确的作用域即可，Forward渲染路径的修改即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改
+我只需要移动端，Forward渲染路径的修改即可，行号不用做出太多纠正，代码只要在正确的文件中，正确的作用域即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改
 
 1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileAfterTranslucencyPass
 
@@ -252,7 +252,7 @@ IsAfterTranslucencyBasePass)
        , bTranslucentBasePass(InTranslucencyPassType != ETranslucencyPass::TPT_MAX)
        , bDeferredShading(IsMobileDeferredShadingEnabled(GetFeatureLevelShaderPlatform(ERHIFeatureLevel::ES3_1)))
        , bPassUsesDeferredShading(bDeferredShading && !bTranslucentBasePass)
-       , bAfterTranslucencyBasePass(IsAfterTranslucencyBasePass))//RenderAfterTranslucency Added
+       , bAfterTranslucencyBasePass(IsAfterTranslucencyBasePass)//RenderAfterTranslucency Added
    {
    }
 ```

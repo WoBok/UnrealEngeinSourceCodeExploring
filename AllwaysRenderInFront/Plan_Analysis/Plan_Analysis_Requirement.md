@@ -82,6 +82,19 @@ SCOPED_GPU_STAT(RHICmdList, AfterTranslucency);
 分析深度渲染和这里的关系，RenderMobileAfterTranslucencyPass中渲染的如果都是不透明物体，这些物体的深度应该会和BasePass中的一起渲染深度吧？
 所以我在这里RenderMobileAfterTranslucencyPass是可以读到这个Pass中物体的深度的吧？我也不需要在这里写入深度吧？
 
+---
+void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy *RESTRICT PrimitiveSceneProxy, int32 StaticMeshId)
+{
+if (!MeshBatch.bUseForMaterial ||
+(Flags & FMobileBasePassMeshProcessor::EFlags::DoNotCache) == FMobileBasePassMeshProcessor::EFlags::DoNotCache ||
+(PrimitiveSceneProxy && !PrimitiveSceneProxy->ShouldRenderInMainPass()))
+{
+return;
+}
+第一个问题，这里的判断，如果PrimitiveSceneProxy为空，不就直接return了吗？
+
+
+---
 
 【次要·VR 性能】 Tile-Based GPU 上的 tile memory 反复加载
 位置:MobileShadingRenderer.cpp 的两个调用点。
