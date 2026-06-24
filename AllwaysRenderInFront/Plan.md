@@ -1,6 +1,8 @@
 我现在正在UE5.4中开发Android端VR游戏，我现在有这样一个需求，在渲染不透明物体的阶段，我标记的物体不进行渲染，当渲染完成透明物体后再渲染我标记的物体，我的想法是模仿移动端不透明物体渲染的逻辑，在透明物体渲染完成后再进行一次
-我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），我只需要让Mesh和Skeletal Mesh生效即可，我也不需要CustomDepth，
-我只需要移动端，Forward渲染路径的修改即可，行号不用做出太多纠正，代码只要在正确的文件中，正确的作用域即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改
+我标记物体的渲染，沿用不透明物体渲染深度测试等逻辑即可，因为我在透明物体之后渲染，透明物体不写入深度，所以我可以把透明物体遮挡住（这是我的核心需求），我只需要让Mesh和Skeletal
+Mesh生效即可，我也不需要CustomDepth，
+我只需要移动端，Forward渲染路径的修改即可，行号不用做出太多纠正，代码只要在正确的文件中，正确的作用域即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改，
+只给存在问题的部分和需要继续修改的部分，已验证无错误的不用写在文档里
 
 1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:32在EMeshPass中添加MobileAfterTranslucencyPass
 
@@ -211,53 +213,8 @@ Engine/Source/Runtime/Engine/Public/PrimitiveSceneProxyDesc.h:93附近添加bRen
     bRenderAfterTranslucency = false;//RenderAfterTranslucency Added
 ```
 
-4. Engine/Source/Runtime/Renderer/Private/MobileBasePassRendering.h:533附近添加bAfterTranslucencyBasePass
-
-```c++
-    const bool bPassUsesDeferredShading; 
-    const bool bAfterTranslucencyBasePass; //RenderAfterTranslucency Added
-```
-
-MobileBasePassRendering.h:480构造函数添加bool bAfterTranslucencyBasePass，并设置默认值为false
-
-```c++
-	FMobileBasePassMeshProcessor(
-		EMeshPass::Type InMeshPassType,
-		const FScene* InScene,
-		const FSceneView* InViewIfDynamicMeshCommand,
-		const FMeshPassProcessorRenderState& InDrawRenderState,
-		FMeshPassDrawListContext* InDrawListContext,
-		EFlags Flags,
-		ETranslucencyPass::Type InTranslucencyPassType = ETranslucencyPass::TPT_MAX,
-		bool bAfterTranslucencyBasePass = false);//RenderAfterTranslucency Added
-```
-
-Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:810附近添加构造函数初始化bAfterTranslucencyBasePass(
-IsAfterTranslucencyBasePass)
-
-```c++
-   FMobileBasePassMeshProcessor::FMobileBasePassMeshProcessor(
-       EMeshPass::Type InMeshPassType,
-       const FScene* Scene,
-       const FSceneView* InViewIfDynamicMeshCommand,
-       const FMeshPassProcessorRenderState& InDrawRenderState,
-       FMeshPassDrawListContext* InDrawListContext,
-       EFlags InFlags,
-       ETranslucencyPass::Type InTranslucencyPassType,
-       bool IsAfterTranslucencyBasePass)
-       : FMeshPassProcessor(InMeshPassType, Scene, ERHIFeatureLevel::ES3_1, InViewIfDynamicMeshCommand, InDrawListContext)
-       , PassDrawRenderState(InDrawRenderState)
-       , TranslucencyPassType(InTranslucencyPassType)
-       , Flags(InFlags)
-       , bTranslucentBasePass(InTranslucencyPassType != ETranslucencyPass::TPT_MAX)
-       , bDeferredShading(IsMobileDeferredShadingEnabled(GetFeatureLevelShaderPlatform(ERHIFeatureLevel::ES3_1)))
-       , bPassUsesDeferredShading(bDeferredShading && !bTranslucentBasePass)
-       , bAfterTranslucencyBasePass(IsAfterTranslucencyBasePass)//RenderAfterTranslucency Added
-   {
-   }
-```
-
-Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:867处修改AddMeshBatch函数，通过构造函数传入的bAfterTranslucencyBasePass与PrimitiveSceneProxy中的ShouldRenderAfterTranslucency做Pass分流
+4.Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:
+867处修改AddMeshBatch函数，通过MeshPassType与PrimitiveSceneProxy中的ShouldRenderAfterTranslucency做Pass分流
 
 ```c++
 void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshBatch, uint64 BatchElementMask, const FPrimitiveSceneProxy *RESTRICT PrimitiveSceneProxy, int32 StaticMeshId)
@@ -269,7 +226,8 @@ void FMobileBasePassMeshProcessor::AddMeshBatch(const FMeshBatch &RESTRICT MeshB
         return;
     }
     //RenderAfterTranslucency Added
-    bool bShouldRenderAfterTranslucency = PrimitiveSceneProxy->ShouldRenderAfterTranslucency();
+    const bool bAfterTranslucencyBasePass = (MeshPassType == EMeshPass::MobileAfterTranslucencyPass);
+    const bool bShouldRenderAfterTranslucency = PrimitiveSceneProxy->ShouldRenderAfterTranslucency();
     if (bAfterTranslucencyBasePass)
     {
         if (!bShouldRenderAfterTranslucency)
@@ -325,7 +283,7 @@ FMeshPassProcessor* CreateMobileAfterTranslucencyPassProcessor(ERHIFeatureLevel:
 
 	const FMobileBasePassMeshProcessor::EFlags Flags = FMobileBasePassMeshProcessor::EFlags::CanUseDepthStencil;//这里直接赋值CanUseDepthStencil就可以了吧？不需要CreateMobileBasePassProcessor中那么多判断吧？
 
-	return new FMobileBasePassMeshProcessor(EMeshPass::MobileAfterTranslucencyPass, Scene, InViewIfDynamicMeshCommand, PassDrawRenderState, InDrawListContext, Flags, true);
+	return new FMobileBasePassMeshProcessor(EMeshPass::MobileAfterTranslucencyPass, Scene, InViewIfDynamicMeshCommand, PassDrawRenderState, InDrawListContext, Flags);
 }
 ```
 
@@ -375,33 +333,45 @@ void FMobileSceneRenderer::RenderMobileAfterTranslucencyPass(FRHICommandList& RH
 	View.ParallelMeshDrawCommandPasses[EMeshPass::MobileAfterTranslucencyPass].DispatchDraw(nullptr, RHICmdList, InstanceCullingDrawParams);
 }
 ```
-Engine/Source/Runtime/Renderer/Private/SceneRendering.h的FMobileSceneRenderer中（RenderMobileBasePass声明附近，约 2695 行）添加：
+
+Engine/Source/Runtime/Renderer/Private/SceneRendering.h的FMobileSceneRenderer中（RenderMobileBasePass声明附近，约 2695
+行）添加：
+
 ```c++
 	void RenderMobileBasePass(FRHICommandList& RHICmdList, const FViewInfo& View, const FInstanceCullingDrawParams* InstanceCullingDrawParams);
     void RenderMobileAfterTranslucencyPass(FRHICommandList& RHICmdList, const FViewInfo& View, const FInstanceCullingDrawParams* InstanceCullingDrawParams);
 ```
+
 Engine/Source/Runtime/RenderCore/Private/RenderCore.cpp:65附近添加 DEFINE_STAT(STAT_AfterTranslucencyDrawTime)
 
 ```c++
 DEFINE_STAT(STAT_BasePassDrawTime);
 DEFINE_STAT(STAT_AfterTranslucencyDrawTime);
 ```
+
 在 RenderCore.h 中（STAT_BasePassDrawTime 声明附近，约 44 行）添加：
+
 ```c++
 DECLARE_CYCLE_STAT_EXTERN(TEXT("Base pass drawing"),STAT_BasePassDrawTime,STATGROUP_SceneRendering, RENDERCORE_API);
 DECLARE_CYCLE_STAT_EXTERN(TEXT("After translucency drawing"), STAT_AfterTranslucencyDrawTime, STATGROUP_SceneRendering, RENDERCORE_API);
 ```
+
 Engine/Source/Runtime/Renderer/Private/BasePassRendering.h:144附近
+
 ```c++
 DECLARE_GPU_DRAWCALL_STAT_EXTERN(Basepass);
 DECLARE_GPU_DRAWCALL_STAT_EXTERN(AfterTranslucency);
 ```
+
 在Engine/Source/Runtime/Renderer/Private/SceneRendering.h:2796处添加AfterTranslucencyInstanceCullingDrawParams
+
 ```c++
 	FInstanceCullingDrawParams TranslucencyInstanceCullingDrawParams;	
 	FInstanceCullingDrawParams AfterTranslucencyInstanceCullingDrawParams;
 ```
+
 在Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:1433BuildInstanceCullingDrawParams中添加
+
 ```c++
 void FMobileSceneRenderer::BuildInstanceCullingDrawParams(FRDGBuilder& GraphBuilder, FViewInfo& View, FMobileRenderPassParameters* PassParameters)
 {
@@ -419,7 +389,9 @@ void FMobileSceneRenderer::BuildInstanceCullingDrawParams(FRDGBuilder& GraphBuil
 	}
 }
 ```
-Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:1624处RenderForwardSinglePass中添加RenderMobileAfterTranslucencyPass()调用
+
+Engine/Source/Runtime/Renderer/Private/MobileShadingRenderer.cpp:
+1624处RenderForwardSinglePass中添加RenderMobileAfterTranslucencyPass()调用
 
 ```c++
 //...
@@ -548,7 +520,9 @@ if (StaticMeshRelevance.bUseForMaterial && (ViewRelevance.bRenderInMainPass || V
         MarkMask |= EMarkMaskBits::StaticMeshVisibilityMapMask;
     }
 ```
+
 Engine/Source/Runtime/Renderer/Private/SceneVisibility.cpp:2186 ComputeDynamicMeshRelevance中，:2211附近
+
 ```c++
     if (ViewRelevance.bRenderInMainPass || ViewRelevance.bRenderCustomDepth)
     {
@@ -568,14 +542,20 @@ Engine/Source/Runtime/Renderer/Private/SceneVisibility.cpp:2186 ComputeDynamicMe
             View.NumVisibleDynamicMeshElements[EMeshPass::BasePass] += NumElements;
         }
 ```
----
-3.3 设计问题 — bAfterTranslucencyBasePass 成员冗余
-计划添加了 bool bAfterTranslucencyBasePass 成员，但同样的信息可通过 InMeshPassType == EMeshPass::MobileAfterTranslucencyPass 获得。在 AddMeshBatch 中可简化为：
 
-// 在 AddMeshBatch 中，用 MeshPassType 替换 bAfterTranslucencyBasePass 分支：
-const bool bAfterTranslucencyPass = (MeshPassType == EMeshPass::MobileAfterTranslucencyPass);
-if (bAfterTranslucencyPass != PrimitiveSceneProxy->ShouldRenderAfterTranslucency())
+7. Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:1056 CollectPSOInitializers中开头处添加
+
+```c++
+void FMobileBasePassMeshProcessor::CollectPSOInitializers(const FSceneTexturesConfig& SceneTexturesConfig, const FMaterial& Material, const FPSOPrecacheVertexFactoryData& VertexFactoryData, const FPSOPrecacheParams& PreCacheParams, TArray<FPSOPrecacheData>& PSOInitializers)
 {
-return;
-}
-或者直接比较 MeshPassType 以完全去掉这个成员。
+	if (MeshPassType == EMeshPass::MobileAfterTranslucencyPass)
+	{
+		return;
+	}
+	static IConsoleVariable* PSOPrecacheTranslucencyAllPass = IConsoleManager::Get().FindConsoleVariable(TEXT("r.PSOPrecache.TranslucencyAllPass"));
+	// PSO precaching enabled for TranslucencyAll
+	if (MeshPassType == EMeshPass::TranslucencyAll && PSOPrecacheTranslucencyAllPass->GetInt() == 0)
+	{
+		return;
+	}
+```
