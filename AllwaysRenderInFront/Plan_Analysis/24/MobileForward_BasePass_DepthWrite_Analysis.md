@@ -298,3 +298,280 @@ FMobileBasePassMeshProcessor::TryAddMeshBatch / Process   MobileBasePass.cpp (~L
 | DispatchDraw | `Engine/Source/Runtime/Renderer/Private/MeshDrawCommands.cpp` | 1640-1717 |
 | SubmitDrawCommands | `Engine/Source/Runtime/Renderer/Private/InstanceCulling/InstanceCullingContext.cpp` | 1663-1729 |
 | SubmitDrawBegin/End（实际 DrawCall） | `Engine/Source/Runtime/Renderer/Private/MeshPassProcessor.cpp` | 1358-1482 |
+
+---
+
+## 8. 追加验证：实际深度写入是在 RHI / 图形 API Draw 命令中发生
+
+是的：前面的 `FDepthStencilBinding`、`FMeshPassProcessorRenderState`、`FRHIDepthStencilState`、`FGraphicsPipelineStateInitializer` 都是在设置 **RenderPass 附件** 和 **Graphics PSO 状态**；真正触发 GPU 深度测试/深度写入的是 RHI Draw 命令，Vulkan 后端会转换为 `vkCmdDrawIndexed` / `vkCmdDraw`。深度值是否写入由 Vulkan Graphics Pipeline 的 `VkPipelineDepthStencilStateCreateInfo.depthWriteEnable` 和当前 RenderPass 的 DepthStencil Attachment 共同决定。
+
+### 8.1 UE 的 DrawCall 先进入 RHICommandList
+
+`Engine/Source/Runtime/Renderer/Private/MeshPassProcessor.cpp:1433-1482`
+
+```cpp
+void FMeshDrawCommand::SubmitDrawEnd(...)
+{
+    if (MeshDrawCommand.IndexBuffer)
+    {
+        RHICmdList.DrawIndexedPrimitive(...); // L1446
+    }
+    else
+    {
+        RHICmdList.DrawPrimitive(...);        // L1469
+    }
+}
+```
+
+`Engine/Source/Runtime/RHI/Public/RHICommandList.h:3550-3559`
+
+```cpp
+void DrawIndexedPrimitive(...)
+{
+    if (Bypass())
+    {
+        GetContext().RHIDrawIndexedPrimitive(...); // L3555
+        return;
+    }
+    ALLOC_COMMAND(FRHICommandDrawIndexedPrimitive)(...); // L3558
+}
+```
+
+如果没有 bypass，会记录一条 `FRHICommandDrawIndexedPrimitive`；执行时再转给当前 RHI Context：
+
+`Engine/Source/Runtime/RHI/Public/RHICommandListCommandExecutes.inl:155-158`
+
+```cpp
+void FRHICommandDrawIndexedPrimitive::Execute(FRHICommandListBase& CmdList)
+{
+    RHISTAT(DrawIndexedPrimitive);
+    INTERNAL_DECORATOR(RHIDrawIndexedPrimitive)(IndexBuffer, BaseVertexIndex, FirstInstance, NumVertices, StartIndex, NumPrimitives, NumInstances);
+}
+```
+
+因此 `RenderMobileBasePass → RHICmdList.DrawIndexedPrimitive` 之后，最终一定进入具体平台 RHI 的 `RHIDrawIndexedPrimitive`。
+
+### 8.2 Vulkan 后端把 RHI Draw 转成 Vulkan 命令
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanCommands.cpp:661-680`
+
+```cpp
+void FVulkanCommandListContext::RHIDrawIndexedPrimitive(...)
+{
+    CommitGraphicsResourceTables();
+
+    FVulkanCmdBuffer* Cmd = CommandBufferManager->GetActiveCmdBuffer();
+    VkCommandBuffer CmdBuffer = Cmd->GetHandle();
+    PendingGfxState->PrepareForDraw(Cmd);                         // L676
+    VulkanRHI::vkCmdBindIndexBuffer(CmdBuffer, IndexBuffer->GetHandle(), IndexBuffer->GetOffset(), IndexBuffer->GetIndexType()); // L677
+
+    uint32 NumIndices = GetVertexCountForPrimitiveCount(NumPrimitives, PendingGfxState->PrimitiveType);
+    VulkanRHI::vkCmdDrawIndexed(CmdBuffer, NumIndices, NumInstances, StartIndex, BaseVertexIndex, FirstInstance); // L680
+}
+```
+
+非索引绘制同理：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanCommands.cpp:613-627`
+
+```cpp
+void FVulkanCommandListContext::RHIDrawPrimitive(...)
+{
+    CommitGraphicsResourceTables();
+    FVulkanCmdBuffer* CmdBuffer = CommandBufferManager->GetActiveCmdBuffer();
+    PendingGfxState->PrepareForDraw(CmdBuffer);                    // L625
+    VulkanRHI::vkCmdDraw(CmdBuffer->GetHandle(), NumVertices, NumInstances, BaseVertexIndex, 0); // L627
+}
+```
+
+这证明移动端 Vulkan 下，UE 的 BasePass DrawCall 最终就是 Vulkan command buffer 中的 `vkCmdDrawIndexed` / `vkCmdDraw`。
+
+### 8.3 Draw 前绑定的 Vulkan Graphics Pipeline 带有 DepthWrite=true
+
+BasePass 创建的是：
+
+`Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:1157`
+
+```cpp
+PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<true, CF_DepthNearOrEqual>::GetRHI());
+```
+
+`TStaticDepthStencilState<true, ...>` 的第一个模板参数会进入 `FDepthStencilStateInitializerRHI::bEnableDepthWrite`：
+
+`Engine/Source/Runtime/RenderCore/Public/RHIStaticStates.h:197-254`
+
+```cpp
+template<bool bEnableDepthWrite = true, ECompareFunction DepthTest = CF_DepthNearOrEqual, ...>
+class TStaticDepthStencilState ...
+{
+    static FDepthStencilStateRHIRef CreateRHI()
+    {
+        FDepthStencilStateInitializerRHI Initializer(
+            bEnableDepthWrite, // L238
+            DepthTest,
+            ...);
+        return RHICreateDepthStencilState(Initializer); // L253
+    }
+};
+```
+
+Vulkan RHI 创建 `VkPipelineDepthStencilStateCreateInfo` 时直接使用这个 `bEnableDepthWrite`：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanState.cpp:265-271`
+
+```cpp
+void FVulkanDepthStencilState::SetupCreateInfo(..., VkPipelineDepthStencilStateCreateInfo& OutDepthStencilState)
+{
+    OutDepthStencilState.depthTestEnable = (Initializer.DepthTest != CF_Always || Initializer.bEnableDepthWrite) ? VK_TRUE : VK_FALSE;
+    OutDepthStencilState.depthCompareOp = CompareOpToVulkan(Initializer.DepthTest);
+    OutDepthStencilState.depthWriteEnable = Initializer.bEnableDepthWrite ? VK_TRUE : VK_FALSE; // L271 ★
+}
+```
+
+PSO 创建时把该 DepthStencilState 写进 Vulkan Pipeline 描述：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanPipeline.cpp:1873-1878`
+
+```cpp
+VkPipelineDepthStencilStateCreateInfo DSInfo;
+ResourceCast(PSOInitializer.DepthStencilState)->SetupCreateInfo(PSOInitializer, DSInfo);
+OutGfxEntry->DepthStencil.ReadFrom(DSInfo);
+```
+
+随后 `DepthStencil` 被写回 `VkGraphicsPipelineCreateInfo.pDepthStencilState`：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanPipeline.cpp:1338-1343`
+
+```cpp
+VkPipelineDepthStencilStateCreateInfo DepthStencilState;
+GfxEntry->DepthStencil.WriteInto(DepthStencilState);
+PipelineInfo.pDepthStencilState = &DepthStencilState; // L1343
+```
+
+最终调用 Vulkan 创建 Graphics Pipeline：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanPipeline.cpp:1491`
+
+```cpp
+Result = VulkanRHI::vkCreateGraphicsPipelines(Device->GetInstanceHandle(), PipelineCache, 1, &PipelineInfo, VULKAN_CPU_ALLOCATOR, &PSO->VulkanPipeline);
+```
+
+因此 BasePass 的 `TStaticDepthStencilState<true, CF_DepthNearOrEqual>` 会变成 Vulkan Pipeline 里的：
+
+```cpp
+VkPipelineDepthStencilStateCreateInfo.depthWriteEnable = VK_TRUE;
+VkPipelineDepthStencilStateCreateInfo.depthCompareOp   = CompareOpToVulkan(CF_DepthNearOrEqual);
+```
+
+### 8.4 Draw 前绑定该 Vulkan Pipeline
+
+UE 在 `SubmitDrawBegin` 中设置 Graphics Pipeline：
+
+`Engine/Source/Runtime/Renderer/Private/MeshPassProcessor.cpp:1398`
+
+```cpp
+SetGraphicsPipelineState(RHICmdList, GraphicsPSOInit, MeshDrawCommand.StencilRef, ...);
+```
+
+Vulkan RHI 对应实现：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanPipelineState.cpp:559-575`
+
+```cpp
+void FVulkanCommandListContext::RHISetGraphicsPipelineState(...)
+{
+    FVulkanRHIGraphicsPipelineState* Pipeline = ResourceCast(GraphicsState);
+    ...
+    if (PendingGfxState->SetGfxPipeline(Pipeline, bForceResetPipeline))
+    {
+        PendingGfxState->Bind(CmdBuffer->GetHandle()); // L574
+    }
+}
+```
+
+`PendingGfxState->Bind` 调到 Graphics Pipeline 的 `Bind`：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanPendingState.h:273-276`
+
+```cpp
+inline void Bind(VkCommandBuffer CmdBuffer)
+{
+    CurrentPipeline->Bind(CmdBuffer);
+}
+```
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanPipeline.h:727-729`
+
+```cpp
+inline void Bind(VkCommandBuffer CmdBuffer)
+{
+    VulkanRHI::vkCmdBindPipeline(CmdBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, VulkanPipeline);
+}
+```
+
+所以顺序是：先 `vkCmdBindPipeline` 绑定含 `depthWriteEnable=VK_TRUE` 的 Graphics Pipeline，再执行 `vkCmdDrawIndexed`。
+
+### 8.5 RenderPass / Framebuffer 绑定 DepthStencil Attachment
+
+`InitRenderTargetBindings_Forward` 给 RDG Pass 设置 `SceneDepth` 为 DepthStencilTarget。RDG 执行时进入 Vulkan 的 `RHIBeginRenderPass`：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanRenderTarget.cpp:604-689`
+
+```cpp
+FRHITexture* DSTexture = InInfo.DepthStencilRenderTarget.DepthStencilTarget; // L604
+...
+const FExclusiveDepthStencil ExclusiveDepthStencil = InInfo.DepthStencilRenderTarget.ExclusiveDepthStencil;
+if (ExclusiveDepthStencil.IsDepthWrite())
+{
+    CurrentDepthLayout = VK_IMAGE_LAYOUT_ATTACHMENT_OPTIMAL; // L617-620
+}
+...
+FVulkanRenderTargetLayout RTLayout(*Device, InInfo, CurrentDepthLayout, CurrentStencilLayout); // L680
+FVulkanRenderPass* RenderPass = Device->GetRenderPassManager().GetOrCreateRenderPass(RTLayout); // L683
+FVulkanFramebuffer* Framebuffer = Device->GetRenderPassManager().GetOrCreateFramebuffer(RTInfo, RTLayout, RenderPass); // L687
+Device->GetRenderPassManager().BeginRenderPass(...); // L689
+```
+
+随后实际调用 Vulkan BeginRenderPass：
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanRenderpass.cpp:175-209`
+
+```cpp
+FRHITexture* DSTexture = RPInfo.DepthStencilRenderTarget.DepthStencilTarget; // L175
+...
+CmdBuffer->BeginRenderPass(RenderPass->GetLayout(), RenderPass, Framebuffer, ClearValues); // L209
+```
+
+`Engine/Source/Runtime/VulkanRHI/Private/VulkanCommandBuffer.cpp:186-216`
+
+```cpp
+VkRenderPassBeginInfo Info;
+Info.renderPass = RenderPass->GetHandle();
+Info.framebuffer = Framebuffer->GetHandle();
+...
+VulkanRHI::vkCmdBeginRenderPass(CommandBufferHandle, &Info, VK_SUBPASS_CONTENTS_INLINE); // L216
+// 或 vkCmdBeginRenderPass2KHR // L212
+```
+
+这证明 `SceneDepth` 已经作为 Vulkan RenderPass/Framebuffer 的 DepthStencil Attachment 被绑定。
+
+### 8.6 最终 Vulkan 层面的深度写入条件
+
+对于 MobileBasePass，Vulkan 命令流语义可以简化为：
+
+```cpp
+vkCmdBeginRenderPass(... SceneDepth as depth/stencil attachment ...);
+vkCmdBindPipeline(... graphics pipeline with depthWriteEnable = VK_TRUE ...);
+vkCmdBindIndexBuffer(...);
+vkCmdDrawIndexed(...);
+```
+
+深度写入不是一个单独的 `vkCmdWriteDepth` 命令；Vulkan 也没有这种 Draw 外的显式接口。它发生在 `vkCmdDrawIndexed` 执行的图形管线中：片元经过 Depth Test（`depthCompareOp`）后，如果通过且 `depthWriteEnable=VK_TRUE`，GPU 会把片元深度写入当前 RenderPass 的 DepthStencil Attachment。
+
+所以可以确认：
+
+1. **前面的 UE 代码主要是在设置状态**：RenderPass 的 DepthStencil 附件、DepthStencilAccess、Graphics PSO 的 DepthStencilState、StencilRef、Viewport、Vertex/Index Buffer、Shader Binding。
+2. **实际触发写深度的是 RHI Draw 命令**：`RHICmdList.DrawIndexedPrimitive` → `RHIDrawIndexedPrimitive`。
+3. **在 Vulkan Android 后端会转换成 Vulkan 命令**：`vkCmdBindPipeline` + `vkCmdDrawIndexed`，其中 `vkCmdDrawIndexed` 执行时由硬件固定功能把深度写入 Attachment。
+4. **是否写深度由状态决定**：BasePass 的 `<true, CF_DepthNearOrEqual>` → `depthWriteEnable = VK_TRUE`，而 Translucency 的 `<false, ...>` → `depthWriteEnable = VK_FALSE`，因此后续半透明不会再写 SceneDepth。
+
