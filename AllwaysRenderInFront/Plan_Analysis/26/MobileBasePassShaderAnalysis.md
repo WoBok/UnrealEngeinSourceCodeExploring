@@ -37,13 +37,14 @@ Engine/Source/Runtime/Renderer/Private/MobileBasePassRendering.h
 ```
 
 模板参数（排列维度）：
+
 | 维度 | 可选值 |
 |------|--------|
-| `LightMapPolicyType` | `TUniformLightMapPolicy<LMP_XXX>`，如 `LMP_NO_LIGHTMAP`、`LMP_MOBILE_DIRECTIONAL_LIGHT_CSM` 等 10 种 |
-| `OutputFormat` | `LDR_GAMMA_32` / `HDR_LINEAR_64` |
-| `bEnableSkyLight` | true / false |
-| `LocalLightSetting` | `LOCAL_LIGHTS_DISABLED` / `LOCAL_LIGHTS_ENABLED` / `LOCAL_LIGHTS_BUFFER` |
-| `ThinTranslucencyFallback` | `DEFAULT` / `SINGLE_SRC_BLENDING` 等 |
+| LightMapPolicyType | `TUniformLightMapPolicy<LMP_XXX>`，如 LMP_NO_LIGHTMAP、LMP_MOBILE_DIRECTIONAL_LIGHT_CSM 等 10 种 |
+| OutputFormat | LDR_GAMMA_32 / HDR_LINEAR_64 |
+| bEnableSkyLight | true / false |
+| LocalLightSetting | LOCAL_LIGHTS_DISABLED / LOCAL_LIGHTS_ENABLED / LOCAL_LIGHTS_BUFFER |
+| ThinTranslucencyFallback | DEFAULT / SINGLE_SRC_BLENDING 等 |
 
 ### 2.3 Shader 与 .usf 文件的绑定关系（关键）
 
