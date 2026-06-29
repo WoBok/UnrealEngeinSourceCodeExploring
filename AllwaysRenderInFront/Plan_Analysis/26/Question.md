@@ -39,3 +39,7 @@ Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:1187中，
 MobileBasePassVertexShader.usf
 Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:207:GetShader中获取的具体是什么Shader？都是MobileBasePassPixelShader.usf中的或者MobileBasePassVertexShader.usf的吗？
 我自定义创建的材质是怎么被获取的呢？怎么被编译的呢？给我找到相关代码，还要找到调用链，只顺着移动端Forward渲染路径找，分析完成后存到Engine\Docs中，md格式，当前我问的这个问题以引用的方式放到开头
+
+
+也就是说：MaterialShared.cpp:3398 BeginCompileShaderMap先执行，在MobileBasePass.cpp:930:     if (!MobileBasePass::GetShaders(时这些Shader就已经编译好了，那么预先编译好的Shader在GetShaders时是怎么与当前Mesh进行对应的，
+找到相关代码，找到调用链，只寻找Mobil的Forward路径的调用链，需要找到代码证明，贴出关键代码和行号，最后还要整理Mermaid，完成后附到这篇文档后方，记得把这个引用问题也一并附上 

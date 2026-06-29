@@ -1,0 +1,22 @@
+﻿分析
+Engine/Source/Runtime/Renderer/Private/MobileBasePass.cpp:1151 CreateMobileBasePassProcessor中
+
+PassDrawRenderState.SetBlendState(TStaticBlendStateWriteMask<CW_RGBA>::GetRHI());
+PassDrawRenderState.SetDepthStencilAccess(DefaultBasePassDepthStencilAccess);
+PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<true, CF_DepthNearOrEqual>::GetRHI());
+
+这三个函数的主要作用
+
+
+对于问题3，如何新增/复用 FDepthPassMeshProcessor，我的意图是在移动端安卓Forward模式下Subpass0中渲染深度，这个FDepthPassMeshProcessor可以完成吗？Shader绑定等可以完成吗？
+先整理FDepthPassMeshProcessor在哪里被使用，如何被使用，
+如果可以在移动端安卓Forward模式下复用FDepthPassMeshProcessor该如何操作？给出完整的步骤
+我只关注移动端Forward路径，不用关心其他路径，不会使用HDR
+
+对于问题13，帮我确认，这里不会收集PSO？还是BassPass已经添加过了？
+
+这是我的修改方案，我准备在BasePass之后渲染深度，但是这个方法不高效，
+我考虑是否可以复用FDepthPassMeshProcessor中的处理，我只使用移动端安卓Forward路径，我只用这个渲染我标记的物体，是否可行？
+如何在AddMeshBatch中做出区分，还有其他部分做出区分，复用是否可行，或者改动是否大？
+移动端不会使用PreZPass
+将方案保存到相同文件夹，md格式
