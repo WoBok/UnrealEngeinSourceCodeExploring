@@ -2,8 +2,9 @@
 所以我可以把透明物体遮挡住（这是我的核心需求），而且可以读到我标记物体的深度
 我修改源码的思路是我在不透明渲染Pass之后添加MobileAfterTranslucencyDepthPass写入我标记物体的深度，但不写入颜色，在透明物体渲染Pass之后添加MobileAfterTranslucencyPass绘制我标记的物体，这时已经有深度了，可以直接读取
 我只需要让Mesh和Skeletal Mesh生效即可，我也不需要CustomDepth，我只需要移动端，Forward渲染路径的修改即可，
+我现在的做法我的理解是我这样子写入Depth仍然会绑定颜色相关VS/PS，如果我想复用移动端延迟渲染路径的Pass，是否可行，如果可行给出修改方案
 行号不用做出太多纠正，代码只要在正确的文件中，正确的作用域即可，以下是我的引擎修改方案，结合当前工程源码对此方案进行分析，是否有错误存在，是否有潜在问题，是否有完成此功能需要修改的部分但未进行修改，
-只给存在问题的部分和需要继续修改的部分，已验证无错误的不用写在文档里
+只给存在问题的部分和需要继续修改的部分，已验证无错误的不用写在文档里，所有给出的答案要给出相关代码和行号作为佐证
 
 1. Engine/Source/Runtime/Renderer/Public/MeshPassProcessor.h:
    32在EMeshPass中添加MobileAfterTranslucencyPass和MobileAfterTranslucencyDepthPass
@@ -397,6 +398,9 @@ DECLARE_GPU_DRAWCALL_STAT_EXTERN(Basepass);
 DECLARE_GPU_DRAWCALL_STAT_EXTERN(AfterTranslucency);
 DECLARE_GPU_DRAWCALL_STAT_EXTERN(AfterTranslucencyDepth);
 ```
+在:184附近添加
+DEFINE_GPU_DRAWCALL_STAT(AfterTranslucency);
+DEFINE_GPU_DRAWCALL_STAT(AfterTranslucencyDepth);
 
 在Engine/Source/Runtime/Renderer/Private/SceneRendering.h:
 2796处添加AfterTranslucencyInstanceCullingDrawParams和AfterTranslucencyDepthInstanceCullingDrawParams
@@ -612,3 +616,7 @@ void FMobileBasePassMeshProcessor::CollectPSOInitializers(const FSceneTexturesCo
 		return;
 	}
 ```
+
+---
+需要修改PrimitiveSceneInfo.cpp:429吗？
+还有其他需要修改的吗？

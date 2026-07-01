@@ -14,7 +14,7 @@ PassDrawRenderState.SetDepthStencilState(TStaticDepthStencilState<true, CF_Depth
 我只关注移动端Forward路径，不用关心其他路径，不会使用HDR
 
 对于问题13，帮我确认，这里不会收集PSO？还是BassPass已经添加过了？
-
+~~~~
 这是我的修改方案，我准备在BasePass之后渲染深度，但是这个方法不高效，
 我考虑是否可以复用FDepthPassMeshProcessor中的处理，我只使用移动端安卓Forward路径，我只用这个渲染我标记的物体，是否可行？
 如何在AddMeshBatch中做出区分，还有其他部分做出区分，复用是否可行，或者改动是否大？
