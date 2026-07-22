@@ -14,3 +14,20 @@ https://developer-cn.picoxr.com/document/unreal/seethrough/这个是Pico官方�
 Engine\PICO-Unreal-Integration-SDK路径下是Pico的SDK，你可以进行查看并进行验证
 
 将结果保存到Engine\Docs中，md格式
+
+
+1. r.Mobile.PICO.BlendModeSetting 三种模式混合公式，及使用方式，说明混合原理，Alpha如何影响混合，贴出相关代码，要给出文件路径和行号
+2. Opaque / Masked，Translucent，Additive的Alpha混合公式，给出相关代码，要给出文件路径和行号
+3. SceneColor RT到EyeBuffer再到Pico合成BlendMode的完整链路，其中表现出Opaque、Mask、Translucent、Additive的绘制，整理成Mermaid，要给出文件路径和行号佐证，其中要包含SceneColor RT的Alpha默认值是多少
+4. 说明特殊情况，Translucent的Alpha相当于参与了两次混合时的相乘，变暗了，如何避免（我的方式，把我的Alpha在材质中进行Sqrt，这样最终输出就能保持一致了），还有Additive的特殊情况，不写入RT Alpha，材质中预乘等，导致VST中看不到，说明材质的Write Alpha Only是什么，以及是如何写入
+5. 在VST下正常使用透明物体的两种方法：1. ClipMode模式下对需要在VST中显示的透明物体的Alpha在在材质中做Sqrt 2.切换成AdditiveMode模式
+RT的
+根据Engine\Docs中文档，整理上方问题，只关注以上问题即可，对结果的正确性要进行验证
+要求：
+整理的文档要干净整洁，针对以上问题只保留必要重要信息，但不能遗漏重要信息，要简洁明了易于阅读，有好的排版，逻辑清晰，方便查阅，是一种通用文档，避免使用特例及注意措辞
+
+附：
+https://developer-cn.picoxr.com/document/unreal/seethrough/这个是Pico官方的文档
+Engine\PICO-Unreal-Integration-SDK路径下是Pico的SDK
+
+将结果保存到Engine\Docs中，md格式
